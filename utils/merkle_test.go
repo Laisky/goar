@@ -1,7 +1,11 @@
 package utils
 
 import (
+	"fmt"
+	"github.com/everFinance/goar/types"
+	"github.com/stretchr/testify/require"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,17 +34,27 @@ func TestGenerateLeaves(t *testing.T) {
 }
 
 func TestChunkStream(t *testing.T) {
-	data, err := os.ReadFile("img.jpeg")
-	assert.NoError(t, err)
-	dataReader, err := os.Open("img.jpeg")
-	assert.NoError(t, err)
-	defer dataReader.Close()
-	chunks01 := chunkData(data)
-	chunks02, err := chunkStreamData(dataReader)
-	assert.NoError(t, err)
-	assert.Equal(t, len(chunks01), len(chunks02))
-	for i := 0; i < len(chunks01); i++ {
-		assert.Equal(t, chunks01[i].MaxByteRange, chunks02[i].MaxByteRange)
+	for _, size := range []int{0, 1, types.MIN_CHUNK_SIZE - 1, types.MIN_CHUNK_SIZE, types.MAX_CHUNK_SIZE - 1, types.MAX_CHUNK_SIZE, types.MAX_CHUNK_SIZE + 1, types.MAX_CHUNK_SIZE + types.MIN_CHUNK_SIZE - 1, 2*types.MAX_CHUNK_SIZE + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			data := make([]byte, size)
+			for i := range data {
+				data[i] = byte(i*31 + 7)
+			}
+			path := filepath.Join(t.TempDir(), "synthetic.bin")
+			require.NoError(t, os.WriteFile(path, data, 0600))
+			dataReader, err := os.Open(path)
+			require.NoError(t, err)
+			defer dataReader.Close()
+			chunks01 := chunkData(data)
+			chunks02, err := chunkStreamData(dataReader)
+			require.NoError(t, err)
+			require.Equal(t, len(chunks01), len(chunks02))
+			for i := range chunks01 {
+				assert.Equal(t, chunks01[i].MaxByteRange, chunks02[i].MaxByteRange)
+				assert.Equal(t, chunks01[i].MinByteRange, chunks02[i].MinByteRange)
+				assert.Equal(t, chunks01[i].DataHash, chunks02[i].DataHash)
+			}
+		})
 	}
 }
 

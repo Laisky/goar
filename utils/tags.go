@@ -1,8 +1,9 @@
 package utils
 
 import (
+	"encoding/binary"
+	"errors"
 	"github.com/everFinance/goar/types"
-	"github.com/hamba/avro"
 	"github.com/linkedin/goavro/v2"
 )
 
@@ -47,36 +48,36 @@ func SerializeTags1(tags []types.Tag) ([]byte, error) {
 	if len(tags) == 0 {
 		return make([]byte, 0), nil
 	}
-
-	tagsParser, err := avro.Parse(`{"type": "array", "items": {"type": "record", "name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "value", "type": "string"}]}}`)
+	codec, err := goavro.NewCodec(avroTagRecordSchema)
 	if err != nil {
 		return nil, err
 	}
-
-	return avro.Marshal(tagsParser, tags)
+	var payload []byte
+	for _, tag := range tags {
+		payload, err = codec.BinaryFromNative(payload, map[string]interface{}{"name": []byte(tag.Name), "value": []byte(tag.Value)})
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Preserve the legacy serializer's negative-count, sized array block.
+	// Avro strings and bytes have identical binary field representations.
+	var prefix [2 * binary.MaxVarintLen64]byte
+	n := binary.PutVarint(prefix[:], -int64(len(tags)))
+	n += binary.PutVarint(prefix[n:], int64(len(payload)))
+	encoded := make([]byte, 0, n+len(payload)+1)
+	encoded = append(encoded, prefix[:n]...)
+	encoded = append(encoded, payload...)
+	return append(encoded, 0), nil
 }
 
 func DeserializeTags1(data []byte) ([]types.Tag, error) {
-	tagsParser, err := avro.Parse(`{"type": "array", "items": {"type": "record", "name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "value", "type": "string"}]}}`)
-	if err != nil {
-		return nil, err
-	}
-	tags := make([]types.Tag, 0)
-	err = avro.Unmarshal(tagsParser, data, &tags)
-	return tags, err
+	// Avro string and byte values share the same binary representation. Use
+	// the decoder that reports truncated input rather than discarding EOF.
+	return DeserializeTags(data)
 }
 
-const avroTagSchema = `{
-	"type": "array",
-	"items": {
-		"type": "record",
-		"name": "Tag",
-		"fields": [
-			{ "name": "name", "type": "bytes" },
-			{ "name": "value", "type": "bytes" }
-		]
-	}
-}`
+const avroTagRecordSchema = `{"type":"record","name":"Tag","fields":[{"name":"name","type":"bytes"},{"name":"value","type":"bytes"}]}`
+const avroTagSchema = `{"type":"array","items":` + avroTagRecordSchema + `}`
 
 func SerializeTags(tags []types.Tag) ([]byte, error) {
 	if len(tags) == 0 {
@@ -107,9 +108,13 @@ func DeserializeTags(data []byte) ([]types.Tag, error) {
 		return nil, err
 	}
 
-	avroTags, _, err := codec.NativeFromBinary(data)
+	avroTags, remaining, err := codec.NativeFromBinary(data)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(remaining) != 0 {
+		return nil, errors.New("trailing Avro tag bytes")
 	}
 
 	tags := []types.Tag{}
