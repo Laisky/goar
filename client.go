@@ -424,7 +424,7 @@ func (c *Client) GraphQL(ctx context.Context, query string) ([]byte, error) {
 	}
 
 	if statusCode != http.StatusOK {
-		return nil, fmt.Errorf(string(data))
+		return nil, errors.New(string(data))
 	}
 
 	// unwrap data
